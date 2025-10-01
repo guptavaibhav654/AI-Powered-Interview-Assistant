@@ -207,6 +207,15 @@ function App() {
 
   async function startQA(updates) {
     if (!active) return
+    // Clear persisted quiz state in localStorage to avoid stale history
+    localStorage.removeItem('tw_qIndex')
+    localStorage.removeItem('tw_submittedQuestions')
+    localStorage.removeItem('tw_deadline')
+    localStorage.removeItem('tw_selected')
+    localStorage.removeItem('tw_correctCount')
+    localStorage.removeItem('tw_points')
+    localStorage.removeItem('tw_step')
+
     setCandidates((arr) => arr.map((c) => c.id === active ? { ...c, ...updates, qa: [] } : c))
     // Reset quiz state completely
     setCorrectCount(0)
@@ -215,15 +224,18 @@ function App() {
     setQIndex(0)  // Always start from question 0 (which displays as question 1)
     setSubmittedQuestions(new Set())  // Clear submitted questions
     setStep('qa')
+    setDeadline(null)
     // Load fresh questions for this session and wait for them to be ready
     await ai.loadQuestions()
 
     // Poll until questions are ready
     let meta = ai.get(0)
     let attempts = 0
-    while ((!meta.q || meta.q === 'Loading...' || !meta.choices || meta.choices.length === 0) && attempts < 20) {
+    while ((!meta.q || meta.q === 'Loading...' || !meta.choices || meta.choices.length === 0) && attempts < 50) {
       console.log('Waiting for questions to be ready, attempt:', attempts)
       await new Promise(r => setTimeout(r, 100))
+      // Force refresh by calling loadQuestions again to update state
+      await ai.loadQuestions()
       meta = ai.get(0)
       attempts++
     }
