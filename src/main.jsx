@@ -2,6 +2,7 @@ import React from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Routes, Route, Navigate, Link, useSearchParams } from 'react-router-dom'
 import './main.css'
+import { ensureSessionQuestions, clearSessionQuestions } from './ai/generator'
 
 function Layout({ children, title }) {
   return (
@@ -20,7 +21,7 @@ function Landing() {
     <Layout>
       <div className="max-w-6xl mx-auto px-4 py-12 grid md:grid-cols-2 gap-8 items-center">
         <div>
-          <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-slate-900">Ace interviews with AI coaching</h1>
+          <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-slate-900">Ace interviews with AI </h1>
           <p className="mt-4 text-slate-600">Upload a resume, practice timed Q&A, and review candidates in a lightweight dashboard.</p>
           <div className="mt-6 flex gap-3">
             <Link className="px-5 py-2.5 rounded-md bg-blue-600 text-white" to="/app">Start Practicing</Link>
@@ -42,54 +43,27 @@ function Landing() {
 }
 
 function useAi() {
-  const questions = [
-    {
-      q: 'Which hook manages local state in a React function component?',
-      diff: 'easy',
-      time: 20,
-      choices: ['useMemo', 'useEffect', 'useState', 'useRef'],
-      correctIndex: 2,
-    },
-    {
-      q: 'Which HTTP method is idempotent by convention?',
-      diff: 'easy',
-      time: 20,
-      choices: ['POST', 'GET', 'PATCH', 'CONNECT'],
-      correctIndex: 1,
-    },
-    {
-      q: 'React reconciles lists efficiently when you provide:',
-      diff: 'medium',
-      time: 60,
-      choices: ['array length', 'index as key', 'stable unique keys', 'className'],
-      correctIndex: 2,
-    },
-    {
-      q: 'Which API schedules microtasks?',
-      diff: 'medium',
-      time: 60,
-      choices: ['setTimeout', 'Promise.then', 'requestAnimationFrame', 'setInterval'],
-      correctIndex: 1,
-    },
-    {
-      q: 'Best way to render 100k items list?',
-      diff: 'hard',
-      time: 120,
-      choices: ['Memoize items only', 'Virtualize/Windowing', 'Use CSS only', 'Increase heap size'],
-      correctIndex: 1,
-    },
-    {
-      q: 'In Node.js, how do you offload CPU-bound tasks without blocking the event loop?',
-      diff: 'hard',
-      time: 120,
-      choices: ['cluster module', 'worker_threads', 'Increase event loop tick', 'setImmediate loop'],
-      correctIndex: 1,
-    },
-  ]
+  const [sessionQuestions, setSessionQuestions] = React.useState(null)
+  const [isLoading, setIsLoading] = React.useState(false)
+
+  const loadQuestions = React.useCallback(async () => {
+    if (sessionQuestions) return sessionQuestions
+    setIsLoading(true)
+    try {
+      const questions = await ensureSessionQuestions()
+      setSessionQuestions(questions)
+      return questions
+    } finally {
+      setIsLoading(false)
+    }
+  }, [sessionQuestions])
+
   return {
-    get(index) { return questions[index % questions.length] },
-    list: questions,
+    get(index) { return sessionQuestions?.[index] || { q: 'Loading...', diff: 'easy', time: 20, choices: [], correctIndex: 0 } },
+    list: sessionQuestions || [],
     total: 6,
+    loadQuestions,
+    isLoading,
   }
 }
 
@@ -98,7 +72,6 @@ async function extractTextFromFile(file) {
   const name = file.name.toLowerCase()
   if (name.endsWith('.pdf')) {
     const pdfjs = await import('pdfjs-dist')
-    // @ts-ignore worker setup for vite
     const workerSrc = (await import('pdfjs-dist/build/pdf.worker.mjs?url')).default
     pdfjs.GlobalWorkerOptions.workerSrc = workerSrc
     const arrayBuffer = await file.arrayBuffer()
@@ -206,7 +179,6 @@ function App() {
   React.useEffect(() => { localStorage.setItem('tw_qIndex', String(qIndex)) }, [qIndex])
   React.useEffect(() => { localStorage.setItem('tw_deadline', String(deadline || 0)) }, [deadline])
 
-  // show Welcome Back if unfinished session on load
   React.useEffect(() => {
     const hasUnfinished = !!active && candidates.find(c=>c.id===active) && step !== 'done'
     if (hasUnfinished) setShowWelcome(true)
@@ -226,17 +198,18 @@ function App() {
     setCandidates((arr) => [c, ...arr])
     setActive(id)
     setStep('collect')
+    clearSessionQuestions()
     return false
   }
 
-  function startQA(updates) {
+  async function startQA(updates) {
     if (!active) return
     setCandidates((arr) => arr.map((c) => c.id === active ? { ...c, ...updates } : c))
-    // reset per-session quiz state
     setCorrectCount(0)
     setPoints(0)
     setSelected(null)
     setStep('qa')
+    await ai.loadQuestions()
     const meta = ai.get(0)
     setQIndex(0)
     setDeadline(Date.now() + meta.time * 1000)
@@ -348,8 +321,14 @@ function App() {
                   <h3 className="font-semibold">Quiz Question {qIndex+1} of {ai.total}</h3>
                   <Countdown secondsLeft={timeLeft()} onElapsed={submitAnswer} />
                 </div>
-                <p className="mt-2 text-slate-700">{ai.get(qIndex).q}</p>
-                <p className="text-sm text-slate-500 mt-1">Difficulty: {ai.get(qIndex).diff.toUpperCase()} · Time: {timeLeft()}s left</p>
+                {ai.isLoading ? (
+                  <p className="mt-2 text-slate-500">Loading questions...</p>
+                ) : (
+                  <>
+                    <p className="mt-2 text-slate-700">{ai.get(qIndex).q}</p>
+                    <p className="text-sm text-slate-500 mt-1">Difficulty: {ai.get(qIndex).diff.toUpperCase()} · Time: {timeLeft()}s left</p>
+                  </>
+                )}
                 <form className="mt-4 space-y-2" onSubmit={(e)=>{e.preventDefault(); submitAnswer();}}>
                   <div className="space-y-2">
                     {ai.get(qIndex).choices.map((ch, i)=> (
@@ -359,7 +338,7 @@ function App() {
                       </label>
                     ))}
                   </div>
-                  <button className="px-4 py-2 bg-blue-600 text-white rounded-md mt-2" disabled={selected===null}>Submit</button>
+                  <button className="px-4 py-2 bg-blue-600 text-white rounded-md mt-2" disabled={selected===null || ai.isLoading}>Submit</button>
                 </form>
               </div>
             )}
