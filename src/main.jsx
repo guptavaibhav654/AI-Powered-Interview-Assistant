@@ -47,7 +47,6 @@ function useAi() {
   const [isLoading, setIsLoading] = React.useState(false)
 
   const loadQuestions = React.useCallback(async () => {
-    if (sessionQuestions) return sessionQuestions
     setIsLoading(true)
     try {
       const questions = await ensureSessionQuestions()
@@ -56,13 +55,18 @@ function useAi() {
     } finally {
       setIsLoading(false)
     }
-  }, [sessionQuestions])
+  }, [])
+
+  const resetQuestions = React.useCallback(() => {
+    setSessionQuestions(null)
+  }, [])
 
   return {
     get(index) { return sessionQuestions?.[index] || { q: 'Loading...', diff: 'easy', time: 20, choices: [], correctIndex: 0 } },
     list: sessionQuestions || [],
     total: 6,
     loadQuestions,
+    resetQuestions,
     isLoading,
   }
 }
@@ -198,6 +202,8 @@ function App() {
     setCandidates((arr) => [c, ...arr])
     setActive(id)
     setStep('collect')
+    // Reset questions for new candidate
+    ai.resetQuestions()
     clearSessionQuestions()
     return false
   }
@@ -205,13 +211,15 @@ function App() {
   async function startQA(updates) {
     if (!active) return
     setCandidates((arr) => arr.map((c) => c.id === active ? { ...c, ...updates } : c))
+    // Reset quiz state completely
     setCorrectCount(0)
     setPoints(0)
     setSelected(null)
+    setQIndex(0)
     setStep('qa')
+    // Load fresh questions for this session
     await ai.loadQuestions()
     const meta = ai.get(0)
-    setQIndex(0)
     setDeadline(Date.now() + meta.time * 1000)
   }
 
@@ -242,7 +250,7 @@ function App() {
       setPoints(nextPoints)
       setCorrectCount(nextCorrect)
     }
-    setCandidates((arr) => arr.map((c) => c.id === active ? { ...c, qa: [...c.qa, { question: meta.q, selected, correctIndex: meta.correctIndex, secondsAllowed: meta.time, secondsUsed: Math.max(0, used) }] } : c))
+    setCandidates((arr) => arr.map((c) => c.id === active ? { ...c, qa: [...c.qa, { question: meta.q, choices: meta.choices, selected, correctIndex: meta.correctIndex, secondsAllowed: meta.time, secondsUsed: Math.max(0, used) }] } : c))
     setSelected(null)
     if (qIndex >= ai.total - 1) {
       const finalPoints = nextPoints
@@ -423,14 +431,17 @@ function App() {
                     <h4 className="font-semibold">Quiz Answers</h4>
                     <ol className="mt-2 space-y-2 list-decimal pl-5">
                       {candidates.find(c=>c.id===viewId)?.qa.map((qa, idx) => {
-                        const meta = ai.get(idx)
-                        const selectedText = meta.choices?.[qa.selected]
-                        const correctText = meta.choices?.[qa.correctIndex]
+                        // Use the stored question data instead of ai.get()
+                        const questionText = qa.question || 'Question not available'
+                        const selectedText = qa.selected !== null && qa.selected !== undefined ? 
+                          (qa.choices ? qa.choices[qa.selected] : `Option ${qa.selected + 1}`) : '—'
+                        const correctText = qa.correctIndex !== null && qa.correctIndex !== undefined ? 
+                          (qa.choices ? qa.choices[qa.correctIndex] : `Option ${qa.correctIndex + 1}`) : '—'
                         const correct = qa.selected === qa.correctIndex
                         return (
                           <li key={idx} className="">
-                            <div className="font-medium">{meta.q}</div>
-                            <div className={`text-sm ${correct? 'text-green-700' : 'text-red-700'}`}>Selected: {selectedText ?? '—'} {correct? '(Correct)' : '(Incorrect)'}</div>
+                            <div className="font-medium">{questionText}</div>
+                            <div className={`text-sm ${correct? 'text-green-700' : 'text-red-700'}`}>Selected: {selectedText} {correct? '(Correct)' : '(Incorrect)'}</div>
                             {!correct && (
                               <div className="text-sm text-slate-600">Correct: {correctText}</div>
                             )}
