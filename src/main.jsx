@@ -133,10 +133,7 @@ function App() {
     try { return JSON.parse(localStorage.getItem('tw_active') || 'null') } catch { return null }
   })
   const [step, setStep] = React.useState(()=> localStorage.getItem('tw_step') || 'collect')
-  const [qIndex, setQIndex] = React.useState(()=> {
-    const n = parseInt(localStorage.getItem('tw_qIndex') || '0', 10)
-    return Number.isFinite(n) ? n : 0
-  })
+  const [qIndex, setQIndex] = React.useState(0)
   const [deadline, setDeadline] = React.useState(()=> {
     const v = parseInt(localStorage.getItem('tw_deadline') || '0', 10)
     return Number.isFinite(v) && v > 0 ? v : null
@@ -144,6 +141,7 @@ function App() {
   const [selected, setSelected] = React.useState(null)
   const [correctCount, setCorrectCount] = React.useState(0)
   const [points, setPoints] = React.useState(0)
+  const [submittedQuestions, setSubmittedQuestions] = React.useState(new Set())
   const [viewId, setViewId] = React.useState(null)
   const [showWelcome, setShowWelcome] = React.useState(false)
   const [search, setSearch] = React.useState('')
@@ -180,7 +178,6 @@ function App() {
   React.useEffect(() => { localStorage.setItem('tw_candidates', JSON.stringify(candidates)) }, [candidates])
   React.useEffect(() => { localStorage.setItem('tw_active', JSON.stringify(active)) }, [active])
   React.useEffect(() => { localStorage.setItem('tw_step', step) }, [step])
-  React.useEffect(() => { localStorage.setItem('tw_qIndex', String(qIndex)) }, [qIndex])
   React.useEffect(() => { localStorage.setItem('tw_deadline', String(deadline || 0)) }, [deadline])
 
   React.useEffect(() => {
@@ -210,17 +207,24 @@ function App() {
 
   async function startQA(updates) {
     if (!active) return
-    setCandidates((arr) => arr.map((c) => c.id === active ? { ...c, ...updates } : c))
+    setCandidates((arr) => arr.map((c) => c.id === active ? { ...c, ...updates, qa: [] } : c))
     // Reset quiz state completely
     setCorrectCount(0)
     setPoints(0)
     setSelected(null)
-    setQIndex(0)
+    setQIndex(0)  // Always start from question 0 (which displays as question 1)
+    setSubmittedQuestions(new Set())  // Clear submitted questions
     setStep('qa')
-    // Load fresh questions for this session
+    // Load fresh questions for this session and wait for them to be ready
     await ai.loadQuestions()
-    const meta = ai.get(0)
-    setDeadline(Date.now() + meta.time * 1000)
+    // Wait a bit more to ensure questions are fully loaded
+    setTimeout(() => {
+      const meta = ai.get(0)
+      console.log('Starting quiz with qIndex:', 0, 'Question:', meta.q)
+      if (meta.q && meta.q !== 'Loading...') {
+        setDeadline(Date.now() + meta.time * 1000)
+      }
+    }, 100)
   }
 
   function timeLeft() {
@@ -228,15 +232,24 @@ function App() {
     return Math.max(0, Math.ceil((deadline - Date.now()) / 1000))
   }
 
-  React.useEffect(() => {
-    if (step === 'qa' && deadline && Date.now() >= deadline) {
-      submitAnswer()
-    }
-  }, [step, deadline])
 
   function submitAnswer() {
     if (!active) return
     const meta = ai.get(qIndex)
+    console.log('Submitting answer for qIndex:', qIndex, 'Question:', meta.q, 'Selected:', selected, 'Correct:', meta.correctIndex)
+    
+    // Prevent submitting if question is still loading
+    if (!meta.q || meta.q === 'Loading...') {
+      console.log('Skipping submission - question not ready')
+      return
+    }
+    
+    // Prevent duplicate submissions
+    if (submittedQuestions.has(qIndex)) {
+      console.log('Skipping submission - already submitted this question')
+      return
+    }
+    
     const used = meta.time - timeLeft()
     const isCorrect = selected === meta.correctIndex
     let nextPoints = points
@@ -251,9 +264,10 @@ function App() {
       setCorrectCount(nextCorrect)
     }
     setCandidates((arr) => arr.map((c) => c.id === active ? { ...c, qa: [...c.qa, { question: meta.q, choices: meta.choices, selected, correctIndex: meta.correctIndex, secondsAllowed: meta.time, secondsUsed: Math.max(0, used) }] } : c))
+    setSubmittedQuestions(prev => new Set([...prev, qIndex]))
     setSelected(null)
     if (qIndex >= ai.total - 1) {
-      const finalPoints = nextPoints
+      // Final question - calculate score based on actual answers
       const finalCorrect = nextCorrect
       const finalDisplay = Math.round((finalCorrect / ai.total) * 100)
       const summaryText = `Answered ${finalCorrect}/${ai.total} correctly. Overall score ${finalDisplay}.`
@@ -430,9 +444,11 @@ function App() {
                   <div>
                     <h4 className="font-semibold">Quiz Answers</h4>
                     <ol className="mt-2 space-y-2 list-decimal pl-5">
-                      {candidates.find(c=>c.id===viewId)?.qa.map((qa, idx) => {
-                        // Use the stored question data instead of ai.get()
-                        const questionText = qa.question || 'Question not available'
+                      {candidates.find(c=>c.id===viewId)?.qa.slice(0, 6).map((qa, idx) => {
+                        // Only show questions with valid data
+                        if (!qa.question || qa.question === 'Loading...') return null
+                        
+                        const questionText = qa.question
                         const selectedText = qa.selected !== null && qa.selected !== undefined ? 
                           (qa.choices ? qa.choices[qa.selected] : `Option ${qa.selected + 1}`) : '—'
                         const correctText = qa.correctIndex !== null && qa.correctIndex !== undefined ? 
