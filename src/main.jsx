@@ -217,14 +217,22 @@ function App() {
     setStep('qa')
     // Load fresh questions for this session and wait for them to be ready
     await ai.loadQuestions()
-    // Wait a bit more to ensure questions are fully loaded
-    setTimeout(() => {
-      const meta = ai.get(0)
-      console.log('Starting quiz with qIndex:', 0, 'Question:', meta.q)
-      if (meta.q && meta.q !== 'Loading...') {
-        setDeadline(Date.now() + meta.time * 1000)
-      }
-    }, 100)
+
+    // Poll until questions are ready
+    let meta = ai.get(0)
+    let attempts = 0
+    while ((!meta.q || meta.q === 'Loading...' || !meta.choices || meta.choices.length === 0) && attempts < 20) {
+      console.log('Waiting for questions to be ready, attempt:', attempts)
+      await new Promise(r => setTimeout(r, 100))
+      meta = ai.get(0)
+      attempts++
+    }
+    if (meta.q && meta.q !== 'Loading...') {
+      console.log('Questions ready! Starting quiz with qIndex:', 0, 'Question:', meta.q)
+      setDeadline(Date.now() + meta.time * 1000)
+    } else {
+      console.error('Failed to load questions in time')
+    }
   }
 
   function timeLeft() {
@@ -235,6 +243,10 @@ function App() {
 
   function submitAnswer() {
     if (!active) return
+    if (qIndex < 0 || qIndex >= ai.total) {
+      console.log('Invalid qIndex:', qIndex)
+      return
+    }
     const meta = ai.get(qIndex)
     console.log('Submitting answer for qIndex:', qIndex, 'Question:', meta.q, 'Selected:', selected, 'Correct:', meta.correctIndex)
     
@@ -360,7 +372,7 @@ function App() {
                       </label>
                     ))}
                   </div>
-                  <button className="px-4 py-2 bg-blue-600 text-white rounded-md mt-2" disabled={selected===null || ai.isLoading}>Submit</button>
+                  <button className="px-4 py-2 bg-blue-600 text-white rounded-md mt-2" disabled={selected===null || ai.isLoading || !deadline}>Submit</button>
                 </form>
               </div>
             )}
