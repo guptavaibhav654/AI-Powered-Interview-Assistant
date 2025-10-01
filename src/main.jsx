@@ -352,7 +352,7 @@ function App() {
             {step==='qa' && active && (
               <div className="bg-white rounded-xl shadow p-6">
                 <div className="flex items-center justify-between">
-                  <h3 className="font-semibold">Quiz Question {qIndex+1} of {ai.total}</h3>
+                  {/* <h3 className="font-semibold">Quiz Question {qIndex+1} of {ai.total}</h3> */}
                   <Countdown secondsLeft={timeLeft()} onElapsed={submitAnswer} />
                 </div>
                 {ai.isLoading ? (
